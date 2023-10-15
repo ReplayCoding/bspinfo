@@ -1,8 +1,12 @@
 use binrw::BinRead;
-use std::fs::File;
+use lzma_rs::lzma_decompress;
+use std::{
+    fs::File,
+    io::{self, BufReader, Cursor, Read, Seek},
+};
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, num_enum::TryFromPrimitive)]
+#[derive(Debug, num_enum::TryFromPrimitive, num_enum::IntoPrimitive)]
 #[repr(u32)]
 enum LumpType {
     ENTITIES = 0,
@@ -73,6 +77,7 @@ enum LumpType {
 
 const HEADER_LUMPS: usize = 64;
 
+#[allow(unused)]
 #[derive(BinRead, Debug)]
 struct BspHeader {
     ident: u32,
@@ -81,6 +86,7 @@ struct BspHeader {
     map_revision: u32,
 }
 
+#[allow(unused)]
 #[derive(BinRead, Debug)]
 struct LumpInfo {
     fileofs: u32,
@@ -89,19 +95,75 @@ struct LumpInfo {
     uncompressed_size: u32,
 }
 
+struct BspFile<'a, R> {
+    header: BspHeader,
+    reader: &'a mut R,
+}
+
+impl<'a, R: Read + Seek> BspFile<'a, R> {
+    fn new(reader: &'a mut R) -> binrw::BinResult<BspFile<R>> {
+        Ok(Self {
+            header: BspHeader::read_le(reader)?,
+            reader,
+        })
+    }
+
+    fn version(&self) -> u32 {
+        self.header.version
+    }
+
+    fn map_revision(&self) -> u32 {
+        self.header.map_revision
+    }
+
+    fn lumps(&self) -> &[LumpInfo; HEADER_LUMPS] {
+        &self.header.lumps
+    }
+
+    fn get_lump(&mut self, lump: LumpType) -> Option<Vec<u8>> {
+        let lump = self.header.lumps.get(lump as usize)?;
+
+        if lump.fileofs == 0 || lump.filelen == 0 {
+            return None;
+        }
+
+        self.reader
+            .seek(io::SeekFrom::Start(lump.fileofs.into()))
+            .ok()?;
+        // Compressed
+        Some(if lump.uncompressed_size != 0 {
+            let mut buf: Vec<u8> = vec![];
+            buf.resize(lump.uncompressed_size as usize, 0);
+
+            lzma_decompress(&mut BufReader::new(&mut self.reader), &mut buf).ok()?;
+
+            buf
+        }
+        // Uncompressed
+        else {
+            let mut buf: Vec<u8> = vec![];
+            buf.resize(lump.filelen as usize, 0);
+
+            self.reader.read_exact(&mut buf).ok()?;
+
+            buf
+        })
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
-        println!("usage: bspinfo <mapname.bsp>");
+    if args.len() < 2 {
+        println!("usage: bspinfo <mapname.bsp> [pakfile output dir]");
         return;
     }
 
-    let mut file = File::open(&args[1]).unwrap();
-    let bsp = BspHeader::read_le(&mut file).unwrap();
+    let mut reader = File::open(&args[1]).unwrap();
+    let mut bsp = BspFile::new(&mut reader).unwrap();
 
-    println!("BSP Version: {}", bsp.version);
-    println!("Revision: {}", bsp.map_revision);
-    for (idx, lump) in bsp.lumps.iter().enumerate() {
+    println!("BSP Version: {}", bsp.version());
+    println!("Revision: {}", bsp.map_revision());
+    for (idx, lump) in bsp.lumps().iter().enumerate() {
         let mut lump_name = format!("{}", idx);
         if let Ok(lump_type) = LumpType::try_from(idx as u32) {
             lump_name = format!("{:?}", lump_type);
@@ -113,6 +175,15 @@ fn main() {
             lump.filelen
         };
 
+        if size == 0 {
+            continue;
+        }
+
         println!("{} (v{}): size = {}", lump_name, lump.version, size);
     }
+
+    println!("Entities:");
+    if let Some(entities) = bsp.get_lump(LumpType::ENTITIES) {
+        std::io::copy(&mut Cursor::new(entities), &mut std::io::stdout()).unwrap();
+    };
 }
