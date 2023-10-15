@@ -4,6 +4,7 @@ use std::{
     fs::File,
     io::{self, BufReader, Cursor, Read, Seek},
 };
+use zip::ZipArchive;
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, num_enum::TryFromPrimitive, num_enum::IntoPrimitive)]
@@ -163,26 +164,19 @@ fn main() {
 
     println!("BSP Version: {}", bsp.version());
     println!("Revision: {}", bsp.map_revision());
-    for (idx, lump) in bsp.lumps().iter().enumerate() {
-        let mut lump_name = format!("{}", idx);
-        if let Ok(lump_type) = LumpType::try_from(idx as u32) {
-            lump_name = format!("{:?}", lump_type);
-        };
 
-        let size = if lump.uncompressed_size != 0 {
-            lump.uncompressed_size
-        } else {
-            lump.filelen
-        };
+    println!("\nFiles:");
+    if let Some(pak) = bsp.get_lump(LumpType::PAKFILE) {
+        let mut pakreader = &mut Cursor::new(pak);
+        let mut zip = ZipArchive::new(&mut pakreader).unwrap();
 
-        if size == 0 {
-            continue;
+        for i in 0..zip.len() {
+            let file = zip.by_index_raw(i).unwrap();
+            println!("{}: crc32 = {}", file.name(), file.crc32());
         }
+    };
 
-        println!("{} (v{}): size = {}", lump_name, lump.version, size);
-    }
-
-    println!("Entities:");
+    println!("\nEntities:");
     if let Some(entities) = bsp.get_lump(LumpType::ENTITIES) {
         std::io::copy(&mut Cursor::new(entities), &mut std::io::stdout()).unwrap();
     };
