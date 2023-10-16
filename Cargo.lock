@@ -69,6 +69,7 @@ name = "bspinfo"
 version = "0.1.0"
 dependencies = [
  "binrw",
+ "byteorder",
  "lzma-rs",
  "num_enum",
  "zip",

@@ -1,12 +1,12 @@
 use binrw::BinRead;
-use lzma_rs::lzma_decompress;
+use byteorder::{LittleEndian, ReadBytesExt};
 use std::{
     fs::File,
     io::{self, BufReader, Cursor, Read, Seek},
 };
 use zip::ZipArchive;
 
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 #[derive(Debug, num_enum::TryFromPrimitive, num_enum::IntoPrimitive)]
 #[repr(u32)]
 enum LumpType {
@@ -117,10 +117,6 @@ impl<'a, R: Read + Seek> BspFile<'a, R> {
         self.header.map_revision
     }
 
-    fn lumps(&self) -> &[LumpInfo; HEADER_LUMPS] {
-        &self.header.lumps
-    }
-
     fn get_lump(&mut self, lump: LumpType) -> Option<Vec<u8>> {
         let lump = self.header.lumps.get(lump as usize)?;
 
@@ -133,10 +129,31 @@ impl<'a, R: Read + Seek> BspFile<'a, R> {
             .ok()?;
         // Compressed
         Some(if lump.uncompressed_size != 0 {
-            let mut buf: Vec<u8> = vec![];
-            buf.resize(lump.uncompressed_size as usize, 0);
+            // Adapted from https://github.com/icewind1991/vbsp/blob/0850bb8dbd695a770d39a06f2cc880aa9d626bf7/src/lib.rs#L545
+            // extra 8 byte because game lumps need some padding for reasons
+            let mut buf: Vec<u8> = Vec::with_capacity(std::cmp::min(
+                lump.uncompressed_size as usize + 8,
+                8 * 1024 * 1024,
+            ));
+            if b"LZMA" != &<[u8; 4]>::read(&mut self.reader).ok()? {
+                return None;
+            }
 
-            lzma_decompress(&mut BufReader::new(&mut self.reader), &mut buf).ok()?;
+            let actual_size: u32 = self.reader.read_u32::<LittleEndian>().ok()?;
+            let _lzma_size: u32 = self.reader.read_u32::<LittleEndian>().ok()?;
+
+            lzma_rs::lzma_decompress_with_options(
+                &mut BufReader::new(&mut self.reader),
+                &mut buf,
+                &lzma_rs::decompress::Options {
+                    unpacked_size: lzma_rs::decompress::UnpackedSize::UseProvided(Some(
+                        actual_size as u64,
+                    )),
+                    allow_incomplete: false,
+                    memlimit: None,
+                },
+            )
+            .ok()?;
 
             buf
         }
@@ -172,7 +189,7 @@ fn main() {
 
         for i in 0..zip.len() {
             let file = zip.by_index_raw(i).unwrap();
-            println!("{}: crc32 = {}", file.name(), file.crc32());
+            println!("{}: crc32 = {:08x}", file.name(), file.crc32());
         }
     };
 
