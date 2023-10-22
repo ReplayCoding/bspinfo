@@ -169,32 +169,42 @@ impl<'a, R: Read + Seek> BspFile<'a, R> {
     }
 }
 
+fn usage() {
+    println!("usage: bspinfo files|entities <mapname.bsp>");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        println!("usage: bspinfo <mapname.bsp> [pakfile output dir]");
+        usage();
         return;
     }
 
-    let mut reader = File::open(&args[1]).unwrap();
+    let mut reader = File::open(&args[2]).unwrap();
     let mut bsp = BspFile::new(&mut reader).unwrap();
 
     println!("BSP Version: {}", bsp.version());
     println!("Revision: {}", bsp.map_revision());
 
-    println!("\nFiles:");
-    if let Some(pak) = bsp.get_lump(LumpType::PAKFILE) {
-        let mut pakreader = &mut Cursor::new(pak);
-        let mut zip = ZipArchive::new(&mut pakreader).unwrap();
+    match args[1].as_ref() {
+        "files" => {
+            if let Some(pak) = bsp.get_lump(LumpType::PAKFILE) {
+                let mut pakreader = &mut Cursor::new(pak);
+                let mut zip = ZipArchive::new(&mut pakreader).unwrap();
 
-        for i in 0..zip.len() {
-            let file = zip.by_index_raw(i).unwrap();
-            println!("{}: crc32 = {:08x}", file.name(), file.crc32());
+                for i in 0..zip.len() {
+                    let file = zip.by_index_raw(i).unwrap();
+                    println!("{}: crc32 = {:08x}", file.name(), file.crc32());
+                }
+            };
         }
-    };
 
-    println!("\nEntities:");
-    if let Some(entities) = bsp.get_lump(LumpType::ENTITIES) {
-        std::io::copy(&mut Cursor::new(entities), &mut std::io::stdout()).unwrap();
-    };
+        "entities" => {
+            if let Some(entities) = bsp.get_lump(LumpType::ENTITIES) {
+                std::io::copy(&mut Cursor::new(entities), &mut std::io::stdout()).unwrap();
+            };
+        }
+
+        _ => usage(),
+    }
 }
