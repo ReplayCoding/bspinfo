@@ -2,7 +2,7 @@ use binrw::BinRead;
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::{
     fs::File,
-    io::{self, BufReader, Cursor, Read, Seek},
+    io::{self, BufReader, Cursor, Read, Seek, Write, BufWriter},
 };
 use zip::ZipArchive;
 
@@ -192,9 +192,10 @@ fn main() {
                 let mut pakreader = &mut Cursor::new(pak);
                 let mut zip = ZipArchive::new(&mut pakreader).unwrap();
 
+                let mut w = BufWriter::new(io::stdout().lock());
                 for i in 0..zip.len() {
                     let file = zip.by_index_raw(i).unwrap();
-                    println!("{}: crc32 = {:08x}", file.name(), file.crc32());
+                    writeln!(w, "{}: crc32 = {:08x}", file.name(), file.crc32()).unwrap();
                 }
             };
         }
